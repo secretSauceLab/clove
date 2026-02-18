@@ -44,6 +44,7 @@ class Case(Base):
     applicant: Mapped["Applicant"] = relationship(back_populates="cases")
     status_events: Mapped[List["StatusEvent"]] = relationship(back_populates="case")
     notes: Mapped[List["Note"]] = relationship(back_populates="case")
+    documents: Mapped[List["Document"]] = relationship(back_populates="case")
 
 
 class StatusEvent(Base):
@@ -70,3 +71,30 @@ class Note(Base):
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=datetime.utcnow)
 
     case: Mapped["Case"] = relationship(back_populates="notes")
+
+class DocumentStatus(str, enum.Enum):
+    UPLOADED = "UPLOADED"
+    PROCESSING = "PROCESSING"
+    PROCESSED = "PROCESSED"
+    FAILED = "FAILED"
+
+
+class Document(Base):
+    __tablename__ = "documents"
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    case_id: Mapped[int] = mapped_column(ForeignKey("cases.id", ondelete="CASCADE"))
+
+    filename: Mapped[str] = mapped_column(String(255))
+    content_type: Mapped[Optional[str]] = mapped_column(String(100), nullable=True)
+
+    # For later: point to GCS (gs://bucket/key). For now can be null.
+    gcs_uri: Mapped[Optional[str]] = mapped_column(String(500), nullable=True)
+
+    status: Mapped[str] = mapped_column(String(32), default=DocumentStatus.UPLOADED.value)
+    error_message: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=datetime.utcnow)
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=datetime.utcnow)
+
+    case: Mapped["Case"] = relationship(back_populates="documents")

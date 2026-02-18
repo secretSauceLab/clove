@@ -101,3 +101,26 @@ class CaseListResponse(BaseModel):
     items: List[CaseListItem]
     next_cursor: Optional[int] = None
 
+class DocumentCreate(BaseModel):
+    filename: str = Field(min_length=1, max_length=255)
+    content_type: Optional[str] = Field(default=None, max_length=100)
+
+
+class DocumentCreated(BaseModel):
+    document_id: int
+    case_id: int
+    status: str
+
+class DocumentOut(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
+    id: int
+    case_id: int
+    filename: str
+    content_type: Optional[str] = None
+    gcs_uri: Optional[str] = None
+    status: str
+    error_message: Optional[str] = None
+    created_at: datetime
+    updated_at: datetime
+

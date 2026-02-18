@@ -1,13 +1,16 @@
-from fastapi import FastAPI, Depends, HTTPException
+from fastapi import FastAPI, Depends, HTTPException, APIRouter, BackgroundTasks
 from sqlalchemy.orm import Session, selectinload
-from typing import Dict, Set, Optional
+from typing import Dict, Set, Optional, List
 from sqlalchemy import desc 
 
 from .db import get_db
-from .models import Applicant, Case, StatusEvent, Note, CaseStatus
-from .schemas import IntakeCreate, IntakeCreated, CaseDetail, CaseUpdate, CaseUpdated, NoteCreate, NoteCreated, CaseListResponse, CaseListItem
+from .models import Applicant, Case, StatusEvent, Note, CaseStatus, Document, DocumentStatus
+from .schemas import IntakeCreate, IntakeCreated, CaseDetail, CaseUpdate, CaseUpdated, NoteCreate, NoteCreated, CaseListResponse, CaseListItem, DocumentCreate, DocumentCreated, DocumentOut
+from .auth import require_api_key
+from .jobs import process_document
 
 app = FastAPI(title="Patient Advocacy Intake API")
+router = APIRouter(dependencies=[Depends(require_api_key)])
 
 ALLOWED_TRANSITIONS: Dict[str, Set[str]] = {
     "NEW": {"IN_REVIEW", "CLOSED"},
@@ -24,7 +27,7 @@ def health():
     return {"status": "ok"}
 
 
-@app.post("/intakes", response_model=IntakeCreated, status_code=201)
+@router.post("/intakes", response_model=IntakeCreated, status_code=201)
 def create_intake(payload: IntakeCreate, db: Session = Depends(get_db)):
     try:
         applicant = Applicant(
@@ -58,7 +61,7 @@ def create_intake(payload: IntakeCreate, db: Session = Depends(get_db)):
         db.rollback()
         raise
 
-@app.get("/cases/{case_id}", response_model=CaseDetail)
+@router.get("/cases/{case_id}", response_model=CaseDetail)
 def get_case(case_id: int, db: Session = Depends(get_db)):
     case = (
         db.query(Case)
@@ -80,7 +83,7 @@ def get_case(case_id: int, db: Session = Depends(get_db)):
 
     return case
 
-@app.patch("/cases/{case_id}", response_model=CaseUpdated)
+@router.patch("/cases/{case_id}", response_model=CaseUpdated)
 def update_case(case_id: int, payload: CaseUpdate, db: Session = Depends(get_db)):
     case = db.query(Case).filter(Case.id == case_id).first()
     if not case:
@@ -133,7 +136,7 @@ def update_case(case_id: int, payload: CaseUpdate, db: Session = Depends(get_db)
         db.rollback()
         raise
 
-@app.post("/cases/{case_id}/notes", response_model=NoteCreated, status_code=201)
+@router.post("/cases/{case_id}/notes", response_model=NoteCreated, status_code=201)
 def add_note(case_id: int, payload: NoteCreate, db: Session = Depends(get_db)):
     case = db.query(Case).filter(Case.id == case_id).first()
     if not case:
@@ -155,9 +158,7 @@ def add_note(case_id: int, payload: NoteCreate, db: Session = Depends(get_db)):
         raise
 
 
-
-
-@app.get("/cases", response_model=CaseListResponse)
+@router.get("/cases", response_model=CaseListResponse)
 def list_cases(
     status: Optional[str] = None,
     assignee: Optional[str] = None,
@@ -196,3 +197,50 @@ def list_cases(
 
     next_cursor = rows[-1].id if has_more and rows else None
     return CaseListResponse(items=items, next_cursor=next_cursor)
+
+@router.post("/cases/{case_id}/documents", response_model=DocumentCreated, status_code=201)
+def add_document(
+    case_id: int,
+    payload: DocumentCreate,
+    background_tasks: BackgroundTasks,
+    db: Session = Depends(get_db),
+):
+    case = db.query(Case).filter(Case.id == case_id).first()
+    if not case:
+        raise HTTPException(status_code=404, detail="Case not found")
+
+    doc = Document(
+        case_id=case_id,
+        filename=payload.filename,
+        content_type=payload.content_type,
+        status=DocumentStatus.UPLOADED.value,
+    )
+    db.add(doc)
+
+    try:
+        db.commit()
+        db.refresh(doc)
+
+        # Kick off local background processing
+        background_tasks.add_task(process_document, db, doc.id)
+
+        return DocumentCreated(document_id=doc.id, case_id=case_id, status=doc.status)
+    except Exception:
+        db.rollback()
+        raise
+
+@router.get("/cases/{case_id}/documents", response_model=List[DocumentOut])
+def list_documents(case_id: int, db: Session = Depends(get_db)):
+    case = db.query(Case).filter(Case.id == case_id).first()
+    if not case:
+        raise HTTPException(status_code=404, detail="Case not found")
+
+    docs = (
+        db.query(Document)
+        .filter(Document.case_id == case_id)
+        .order_by(Document.id.desc())
+        .all()
+    )
+    return docs
+
+app.include_router(router)
