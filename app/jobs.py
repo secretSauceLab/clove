@@ -1,33 +1,32 @@
 from datetime import datetime
-from sqlalchemy.orm import Session
 
+from .db import SessionLocal
 from .models import Document, DocumentStatus
 
-def process_document(db: Session, document_id: int):
-    """
-    Local dev 'background job':
-    - marks doc PROCESSING
-    - simulates processing
-    - marks doc PROCESSED (or FAILED)
-    """
-    doc = db.query(Document).filter(Document.id == document_id).first()
-    if not doc:
-        return
-
-    doc.status = DocumentStatus.PROCESSING.value
-    doc.updated_at = datetime.utcnow()
-    db.commit()
-
+def process_document(document_id: int) -> None:
+    db = SessionLocal()
     try:
-        # TODO: real processing later (OCR, parsing, etc.)
-        # For now: simulate success instantly.
+        doc = db.query(Document).filter(Document.id == document_id).first()
+        if not doc:
+            return
+
+        doc.status = DocumentStatus.PROCESSING.value
+        doc.updated_at = datetime.utcnow()
+        db.commit()
+
+        # TODO: real work later
         doc.status = DocumentStatus.PROCESSED.value
         doc.error_message = None
         doc.updated_at = datetime.utcnow()
         db.commit()
     except Exception as e:
         db.rollback()
-        doc.status = DocumentStatus.FAILED.value
-        doc.error_message = str(e)
-        doc.updated_at = datetime.utcnow()
-        db.commit()
+        doc = db.query(Document).filter(Document.id == document_id).first()
+        if doc:
+            doc.status = DocumentStatus.FAILED.value
+            doc.error_message = str(e)
+            doc.updated_at = datetime.utcnow()
+            db.commit()
+        raise
+    finally:
+        db.close()

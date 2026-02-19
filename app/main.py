@@ -8,6 +8,8 @@ from .models import Applicant, Case, StatusEvent, Note, CaseStatus, Document, Do
 from .schemas import IntakeCreate, IntakeCreated, CaseDetail, CaseUpdate, CaseUpdated, NoteCreate, NoteCreated, CaseListResponse, CaseListItem, DocumentCreate, DocumentCreated, DocumentOut
 from .auth import require_api_key
 from .jobs import process_document
+from .enqueue import enqueue_document_processing
+
 
 app = FastAPI(title="Patient Advocacy Intake API")
 router = APIRouter(dependencies=[Depends(require_api_key)])
@@ -198,6 +200,31 @@ def list_cases(
     next_cursor = rows[-1].id if has_more and rows else None
     return CaseListResponse(items=items, next_cursor=next_cursor)
 
+
+@router.get("/cases/{case_id}/documents", response_model=List[DocumentOut])
+def list_documents(case_id: int, db: Session = Depends(get_db)):
+    case = db.query(Case).filter(Case.id == case_id).first()
+    if not case:
+        raise HTTPException(status_code=404, detail="Case not found")
+
+    docs = (
+        db.query(Document)
+        .filter(Document.case_id == case_id)
+        .order_by(Document.id.desc())
+        .all()
+    )
+    return docs
+
+@router.post("/internal/documents/{document_id}/process", status_code=202)
+def process_document_now(document_id: int, db: Session = Depends(get_db)):
+    doc = db.query(Document).filter(Document.id == document_id).first()
+    if not doc:
+        raise HTTPException(status_code=404, detail="Document not found")
+
+    process_document(document_id)
+    return {"status": "accepted", "document_id": document_id}
+
+
 @router.post("/cases/{case_id}/documents", response_model=DocumentCreated, status_code=201)
 def add_document(
     case_id: int,
@@ -221,26 +248,13 @@ def add_document(
         db.commit()
         db.refresh(doc)
 
-        # Kick off local background processing
-        background_tasks.add_task(process_document, db, doc.id)
+        background_tasks.add_task(enqueue_document_processing, doc.id)
 
         return DocumentCreated(document_id=doc.id, case_id=case_id, status=doc.status)
+
     except Exception:
         db.rollback()
         raise
 
-@router.get("/cases/{case_id}/documents", response_model=List[DocumentOut])
-def list_documents(case_id: int, db: Session = Depends(get_db)):
-    case = db.query(Case).filter(Case.id == case_id).first()
-    if not case:
-        raise HTTPException(status_code=404, detail="Case not found")
-
-    docs = (
-        db.query(Document)
-        .filter(Document.case_id == case_id)
-        .order_by(Document.id.desc())
-        .all()
-    )
-    return docs
 
 app.include_router(router)
