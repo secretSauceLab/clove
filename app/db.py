@@ -1,21 +1,31 @@
 import os
 from sqlalchemy import create_engine
 from sqlalchemy.orm import sessionmaker, DeclarativeBase
+from urllib.parse import quote_plus
 
 def _build_database_url() -> str:
-    # Prefer explicit DATABASE_URL if present (local/dev/docker)
+    # 1) Prefer explicit DATABASE_URL if present (local/dev/docker)
     db_url = os.getenv("DATABASE_URL")
     if db_url:
         return db_url
 
-    # Cloud Run / Cloud SQL connector style (unix socket)
-    host = os.getenv("DB_HOST", "localhost")
-    name = os.getenv("DB_NAME", "advocacy")
-    user = os.getenv("DB_USER", "advocacy")
-    password = os.getenv("DB_PASSWORD", "advocacy")
+    # 2) Otherwise build from parts (Cloud Run / Cloud SQL)
+    # We will use a unix socket path via '?host=' which psycopg supports well.
+    db_name = os.getenv("DB_NAME", "advocacy")
+    db_user = os.getenv("DB_USER", "advocacy")
+    db_pass = os.getenv("DB_PASSWORD", "")
+    db_host = os.getenv("DB_HOST")  # expected: /cloudsql/<connectionName> OR hostname
 
-    # psycopg v3 URL
-    return f"postgresql+psycopg://{user}:{password}@{host}/{name}"
+    if db_host and db_host.startswith("/cloudsql/"):
+        # unix socket connection
+        return (
+            f"postgresql+psycopg://{quote_plus(db_user)}:{quote_plus(db_pass)}@/"
+            f"{quote_plus(db_name)}?host={quote_plus(db_host)}"
+        )
+
+    # TCP fallback (local dev, etc.)
+    db_host = db_host or "localhost"
+    return f"postgresql+psycopg://{quote_plus(db_user)}:{quote_plus(db_pass)}@{db_host}/{quote_plus(db_name)}"
 
 DATABASE_URL = _build_database_url()
 
