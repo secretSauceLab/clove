@@ -10,12 +10,14 @@ class NoteCreated(BaseModel):
     note_id: int
     case_id: int
 
+
 class CaseUpdate(BaseModel):
     # all optional so you can patch one thing at a time
     status: Optional[str] = Field(default=None, description="New case status")
     assignee: Optional[str] = Field(default=None, max_length=120)
     actor: Optional[str] = Field(default="system", max_length=120)
     reason: Optional[str] = Field(default=None, max_length=500)
+
 
 class CaseUpdated(BaseModel):
     case_id: int
@@ -35,54 +37,18 @@ class IntakeCreated(BaseModel):
     case_id: int
     status: str
 
-class ApplicantOut(BaseModel):
-    id: int
-    full_name: str
-    email: Optional[EmailStr] = None
-    phone: Optional[str] = None
-    created_at: datetime
-
-    class Config:
-        model_config = ConfigDict(from_attributes=True)
-
-
-
-class StatusEventOut(BaseModel):
-    id: int
-    from_status: Optional[str] = None
-    to_status: str
-    actor: Optional[str] = None
-    reason: Optional[str] = None
-    created_at: datetime
-
-    class Config:
-        model_config = ConfigDict(from_attributes=True)
-
-
 
 class NoteOut(BaseModel):
-    id: int
+    model_config = ConfigDict(from_attributes=True, populate_by_name=True)
+
+    note_id: int = Field(validation_alias="id")
+    case_id: int
     author: str
     body: str
     created_at: datetime
 
-    class Config:
-        model_config = ConfigDict(from_attributes=True)
-
-
-class CaseDetail(BaseModel):
-    id: int
-    narrative: str
-    current_status: str
-    assignee: Optional[str] = None
-    created_at: datetime
-    updated_at: datetime
-    applicant: ApplicantOut
-    status_events: List[StatusEventOut] = []
-    notes: List[NoteOut] = []
-
-    class Config:
-        model_config = ConfigDict(from_attributes=True)
+class NotesList(BaseModel):
+    items: List[NoteOut]
 
 
 class CaseListItem(BaseModel):
@@ -112,15 +78,46 @@ class DocumentCreated(BaseModel):
     status: str
 
 class DocumentOut(BaseModel):
+    model_config = ConfigDict(from_attributes=True, populate_by_name=True)
+
+    document_id: int = Field(validation_alias="id")
+    case_id: int
+    filename: str
+    content_type: str | None = None
+    gcs_uri: str | None = None
+    status: str
+    error_message: str | None = None
+    created_at: datetime
+    updated_at: datetime
+
+class ApplicantOut(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+    id: int
+    full_name: str
+    email: EmailStr | None = None
+    phone: str | None = None
+    created_at: datetime
+
+class StatusEventOut(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+    id: int
+    case_id: int
+    from_status: str | None = None
+    to_status: str
+    actor: str | None = None
+    reason: str | None = None
+    created_at: datetime
+
+class CaseDetail(BaseModel):
     model_config = ConfigDict(from_attributes=True)
 
     id: int
-    case_id: int
-    filename: str
-    content_type: Optional[str] = None
-    gcs_uri: Optional[str] = None
-    status: str
-    error_message: Optional[str] = None
+    narrative: str
+    current_status: str
+    assignee: str | None = None
     created_at: datetime
     updated_at: datetime
+    applicant: ApplicantOut
+    status_events: list[StatusEventOut] = []
+    notes: list[NoteOut] = []
 

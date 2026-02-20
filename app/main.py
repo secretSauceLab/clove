@@ -1,11 +1,13 @@
 from fastapi import FastAPI, Depends, HTTPException, APIRouter, BackgroundTasks
 from sqlalchemy.orm import Session, selectinload
 from typing import Dict, Set, Optional, List
-from sqlalchemy import desc 
+from sqlalchemy import desc, select
+from datetime import datetime
+from pydantic import BaseModel
 
 from .db import get_db
 from .models import Applicant, Case, StatusEvent, Note, CaseStatus, Document, DocumentStatus
-from .schemas import IntakeCreate, IntakeCreated, CaseDetail, CaseUpdate, CaseUpdated, NoteCreate, NoteCreated, CaseListResponse, CaseListItem, DocumentCreate, DocumentCreated, DocumentOut
+from .schemas import IntakeCreate, IntakeCreated, CaseDetail, CaseUpdate, CaseUpdated, NoteCreate, NoteCreated, CaseListResponse, CaseListItem, DocumentCreate, DocumentCreated, DocumentOut, NotesList, NoteOut
 from .auth import require_api_key
 from .jobs import process_document
 from .enqueue import enqueue_document_processing
@@ -256,5 +258,21 @@ def add_document(
         db.rollback()
         raise
 
+
+@router.get("/cases/{case_id}/notes", response_model=NotesList)
+def list_notes(case_id: int, db: Session = Depends(get_db)):
+    # optional: validate case exists with a cheap check
+    case_exists = db.query(Case.id).filter(Case.id == case_id).first()
+    if not case_exists:
+        raise HTTPException(status_code=404, detail="Case not found")
+
+    notes = (
+        db.query(Note)
+        .filter(Note.case_id == case_id)
+        .order_by(Note.created_at.desc())  # prefer timestamp over id
+        .all()
+    )
+
+    return NotesList(items=notes)
 
 app.include_router(router)
