@@ -29,4 +29,4 @@ def process_document(document_id: int) -> None:
             db.commit()
         raise
     finally:
-        db.close()
+        db.close()  
