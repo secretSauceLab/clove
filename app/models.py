@@ -1,5 +1,5 @@
 import enum
-from datetime import datetime
+from datetime import datetime, timezone
 from typing import Optional, List
 
 from sqlalchemy import DateTime, ForeignKey, String, Text
@@ -25,7 +25,7 @@ class Applicant(Base):
     full_name: Mapped[str] = mapped_column(String(200))
     email: Mapped[Optional[str]] = mapped_column(String(320), nullable=True)
     phone: Mapped[Optional[str]] = mapped_column(String(50), nullable=True)
-    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=datetime.utcnow)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=lambda: datetime.now(timezone.utc))
 
     cases: Mapped[List["Case"]] = relationship(back_populates="applicant")
 
@@ -36,11 +36,13 @@ class Case(Base):
     id: Mapped[int] = mapped_column(primary_key=True)
     applicant_id: Mapped[int] = mapped_column(ForeignKey("applicants.id", ondelete="CASCADE"))
     narrative: Mapped[str] = mapped_column(Text)
-    current_status: Mapped[str] = mapped_column(String(32), default=CaseStatus.NEW.value)
-    assignee: Mapped[Optional[str]] = mapped_column(String(120), nullable=True)
-    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=datetime.utcnow)
-    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=datetime.utcnow)
-
+    current_status: Mapped[str] = mapped_column(String(32), index=True, default=CaseStatus.NEW.value)
+    assignee: Mapped[Optional[str]] = mapped_column(String(120), index=True, nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=lambda: datetime.now(timezone.utc))
+    updated_at: Mapped[datetime] = mapped_column(
+            DateTime(timezone=True),
+            default=lambda: datetime.now(timezone.utc),
+            onupdate=lambda: datetime.now(timezone.utc),)
     applicant: Mapped["Applicant"] = relationship(back_populates="cases")
     status_events: Mapped[List["StatusEvent"]] = relationship(back_populates="case")
     notes: Mapped[List["Note"]] = relationship(back_populates="case")
@@ -56,7 +58,8 @@ class StatusEvent(Base):
     to_status: Mapped[str] = mapped_column(String(32))
     actor: Mapped[Optional[str]] = mapped_column(String(120), nullable=True)
     reason: Mapped[Optional[str]] = mapped_column(String(500), nullable=True)
-    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=datetime.utcnow)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=lambda: datetime.now(timezone.utc),
+)
 
     case: Mapped["Case"] = relationship(back_populates="status_events")
 
@@ -68,8 +71,7 @@ class Note(Base):
     case_id: Mapped[int] = mapped_column(ForeignKey("cases.id", ondelete="CASCADE"))
     author: Mapped[str] = mapped_column(String(120))
     body: Mapped[str] = mapped_column(Text)
-    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=datetime.utcnow)
-
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=lambda: datetime.now(timezone.utc))
     case: Mapped["Case"] = relationship(back_populates="notes")
 
 class DocumentStatus(str, enum.Enum):
@@ -94,7 +96,10 @@ class Document(Base):
     status: Mapped[str] = mapped_column(String(32), default=DocumentStatus.UPLOADED.value)
     error_message: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
 
-    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=datetime.utcnow)
-    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=datetime.utcnow)
-
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=lambda: datetime.now(timezone.utc))
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        default=lambda: datetime.now(timezone.utc),
+        onupdate=lambda: datetime.now(timezone.utc)),
+   
     case: Mapped["Case"] = relationship(back_populates="documents")

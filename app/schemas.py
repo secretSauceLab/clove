@@ -1,10 +1,11 @@
 from typing import Optional, List
 from pydantic import BaseModel, EmailStr, Field, ConfigDict
 from datetime import datetime
+from .models import CaseStatus
 
 class NoteCreate(BaseModel):
     author: str = Field(min_length=1, max_length=120)
-    body: str = Field(min_length=1)
+    body: str = Field(min_length=1, max_length=10_000)
 
 class NoteCreated(BaseModel):
     note_id: int
@@ -13,7 +14,7 @@ class NoteCreated(BaseModel):
 
 class CaseUpdate(BaseModel):
     # all optional so you can patch one thing at a time
-    status: Optional[str] = Field(default=None, description="New case status")
+    status: Optional[CaseStatus] = Field(default=None, description="New case status")
     assignee: Optional[str] = Field(default=None, max_length=120)
     actor: Optional[str] = Field(default="system", max_length=120)
     reason: Optional[str] = Field(default=None, max_length=500)
@@ -30,7 +31,7 @@ class IntakeCreate(BaseModel):
     full_name: str = Field(min_length=1, max_length=200)
     email: Optional[EmailStr] = None
     phone: Optional[str] = Field(default=None, max_length=50)
-    narrative: str = Field(min_length=1)
+    narrative: str = Field(min_length=1, max_length=20_000)
 
 
 class IntakeCreated(BaseModel):
