@@ -15,6 +15,7 @@ from .enqueue import enqueue_document_processing
 
 app = FastAPI(title="Patient Advocacy Intake API")
 router = APIRouter(dependencies=[Depends(require_api_key)])
+internal_router = APIRouter(prefix="/internal", dependencies=[Depends(require_api_key)])
 
 ALLOWED_TRANSITIONS: Dict[str, Set[str]] = {
     "NEW": {"IN_REVIEW", "CLOSED"},
@@ -217,7 +218,7 @@ def list_documents(case_id: int, db: Session = Depends(get_db)):
     )
     return docs
 
-@router.post("/internal/documents/{document_id}/process", status_code=202)
+@internal_router.post("/internal/documents/{document_id}/process", status_code=202)
 def process_document_now(document_id: int, db: Session = Depends(get_db)):
     doc = db.query(Document).filter(Document.id == document_id).first()
     if not doc:
@@ -249,16 +250,14 @@ def add_document(
     try:
         db.commit()
         db.refresh(doc)
-
-        background_tasks.add_task(enqueue_document_processing, doc.id)
-
-        return DocumentCreated(document_id=doc.id, case_id=case_id, status=doc.status)
-
     except Exception:
         db.rollback()
         raise
 
+    background_tasks.add_task(enqueue_document_processing, doc.id)
+    return DocumentCreated(document_id=doc.id, case_id=case_id, status=doc.status)
 
+    
 @router.get("/cases/{case_id}/notes", response_model=NotesList)
 def list_notes(case_id: int, db: Session = Depends(get_db)):
     # optional: validate case exists with a cheap check
@@ -276,3 +275,4 @@ def list_notes(case_id: int, db: Session = Depends(get_db)):
     return NotesList(items=notes)
 
 app.include_router(router)
+app.include_router(internal_router)
