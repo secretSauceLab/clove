@@ -1,335 +1,153 @@
-# Clove — Patient Advocacy Intake API
 
-Clove is a small **Patient Advocacy Intake API** built with **FastAPI + Postgres + SQLAlchemy + Alembic**.  
-It’s intentionally scoped to be easy to understand, easy to deploy, and easy to demo.
+# clove
 
-**Core workflow**
-- **Intakes** create **Cases**
-- Cases can have **status events**, **notes**, and **documents (metadata)**
-- Documents can be “processed” via an internal endpoint (stubbed for now)
+A FastAPI intake API for patient advocacy case management. Clove is the internal intake layer that powers Cinnamon's case pipeline — handling everything from first contact with a patient to document processing, status tracking, and case notes.
+
+Named after the spice. We're Cinnamon. You get it.
 
 ---
 
-## Features
+## What it does
 
-- FastAPI REST API
-- Postgres persistence (SQLAlchemy 2.x)
-- Alembic migrations
-- API key auth via `X-API-Key`
-- Docker Compose local dev
-- Cloud Run + Cloud SQL deployment
-- Secret Manager for credentials
+- Accepts patient intake forms and creates advocacy cases
+- Tracks case status through a defined workflow (NEW → IN_REVIEW → SUBMITTED → APPROVED, and so on)
+- Stores case notes, documents, and a full status event audit trail
+- Processes documents asynchronously via background tasks
+- Enforces valid status transitions so nobody accidentally approves a case that hasn't been reviewed (we checked)
 
 ---
 
-## Tech Stack
+## Stack
 
-- Python 3.11
-- FastAPI + Uvicorn
-- SQLAlchemy (sync)
-- Alembic
-- Postgres 16 (local + Cloud SQL)
-- Docker / Docker Compose
-- Google Cloud Run, Cloud SQL, Artifact Registry, Secret Manager
+- **Python 3.11** + **FastAPI**
+- **PostgreSQL** via SQLAlchemy 2.0 (async)
+- **Alembic** for migrations
+- **Docker + Docker Compose** for local development
+- **Google Cloud Run + Cloud SQL** in production (eventually)
 
 ---
 
-## Authentication
+## Getting started
 
-Most endpoints require an API key:
+### Prerequisites
 
-```
-X-API-Key: <your-api-key>
-```
+- Docker
+- Docker Compose
 
-Locally, set `API_KEY` in your environment (or `.env`).  
-In production, store it in Secret Manager and map it to the `API_KEY` environment variable.
+That's it. You don't need Python, Postgres, or anything else installed locally.
 
----
-
-## Endpoints (High Level)
-
-**Public**
-- `POST /intakes` — create an intake (creates a new case)
-- `GET /cases` — list cases (pagination supported)
-- `GET /cases/{case_id}` — case detail
-- `PATCH /cases/{case_id}` — update case status/assignee
-- `POST /cases/{case_id}/notes` — add a note
-- `GET /cases/{case_id}/notes` — list notes
-- `POST /cases/{case_id}/documents` — add a document (metadata)
-- `GET /cases/{case_id}/documents` — list documents
-
-**Internal**
-- `POST /internal/documents/{document_id}/process` — trigger document processing (stub)
-
-To see the full contract:
-- `GET /openapi.json`
-
----
-
-## Local Development (Docker Compose)
-
-### Prereqs
-- Docker + Docker Compose
-
-### 1) Start services
-From the repo root:
-
+### Run it
 ```bash
+cp .env.example .env       # fill in your values
 docker compose up --build
 ```
 
-### 2) Run migrations
-In another terminal:
+The API will be available at `http://localhost:8000`.
 
+### Verify it's alive
 ```bash
+curl http://localhost:8000/health
+# {"status":"oh yeah, we good"}
+```
+
+---
+
+## Environment variables
+
+| Variable | Description | Default |
+|---|---|---|
+| `API_KEY` | Required. Shared secret for API authentication. | — |
+| `DATABASE_URL` | Full Postgres connection string. Overrides individual DB vars. | — |
+| `DB_HOST` | Postgres host. Use `/cloudsql/<connection>` for Cloud SQL. | `localhost` |
+| `DB_NAME` | Database name. | `advocacy` |
+| `DB_USER` | Database user. | `advocacy` |
+| `DB_PASSWORD` | Database password. | — |
+| `DB_POOL_SIZE` | SQLAlchemy connection pool size. | `5` |
+| `DB_MAX_OVERFLOW` | Max overflow connections above pool size. | `2` |
+
+---
+
+## API overview
+
+All endpoints require an `X-API-Key` header. No key, no data. Gerald understands.
+
+| Method | Endpoint | Description |
+|---|---|---|
+| `POST` | `/intakes` | Submit a new patient intake |
+| `GET` | `/cases` | List cases (filterable by status, assignee) |
+| `GET` | `/cases/{id}` | Get full case detail with applicant, notes, and status history |
+| `PATCH` | `/cases/{id}` | Update case status or assignee |
+| `POST` | `/cases/{id}/notes` | Add a note to a case |
+| `GET` | `/cases/{id}/notes` | List notes for a case |
+| `POST` | `/cases/{id}/documents` | Upload a document reference |
+| `GET` | `/cases/{id}/documents` | List documents for a case |
+| `GET` | `/health` | Health check |
+
+### Case status workflow
+
+Cases move through a defined set of states. Not all transitions are legal — the API will tell you if you try something inadvisable.
+```
+NEW → IN_REVIEW → NEEDS_INFO → IN_REVIEW (loop until ready)
+              ↓
+          SUBMITTED → APPROVED → CLOSED
+                    → DENIED  → CLOSED
+```
+
+Any state can transition to `CLOSED`. Because sometimes that's just how it goes.
+
+---
+
+## Running migrations
+```bash
+# Apply all pending migrations
 docker compose exec api alembic upgrade head
-```
 
-### 3) Verify health
-```bash
-curl -s http://localhost:8080/health
-```
+# Generate a new migration after model changes
+docker compose exec api alembic revision --autogenerate -m "describe your change"
 
-Expected:
-```json
-{"status":"ok"}
+# Roll back one migration
+docker compose exec api alembic downgrade -1
 ```
 
 ---
 
-## Local Configuration
-
-This app supports either:
-- `DATABASE_URL` (preferred), or
-- discrete vars: `DB_HOST`, `DB_NAME`, `DB_USER`, `DB_PASSWORD`
-
-### Example: DATABASE_URL (local compose)
+## Running tests
 ```bash
-export DATABASE_URL="postgresql+psycopg://advocacy:advocacy@db:5432/advocacy"
+docker compose exec api pytest tests/ -v
 ```
 
-### Example: discrete vars
-```bash
-export DB_HOST="db"
-export DB_NAME="advocacy"
-export DB_USER="advocacy"
-export DB_PASSWORD="advocacy"
+37 tests. All passing. Gerald's hammock claim is fully covered.
+
+Tests use an in-memory SQLite database with transaction rollback isolation — no Postgres required, no cleanup needed, finishes in under a second.
+
+---
+
+## Project structure
+```
+app/
+  routers/          # one file per domain (intakes, cases, notes, documents)
+  models.py         # SQLAlchemy ORM models
+  schemas.py        # Pydantic request/response schemas
+  db.py             # async engine, session factory, settings
+  auth.py           # API key authentication
+  jobs.py           # background document processing
+  enqueue.py        # background task dispatcher
+alembic/
+  versions/         # migration history
+tests/
+  conftest.py       # shared fixtures
+  test_*.py         # one file per router
 ```
 
 ---
 
-## Quick Local Usage (curl)
+## A note on security
 
-> Replace `API_KEY` if your local config requires it.
+This API handles patient data. A few things worth knowing:
 
-```bash
-API_KEY="dev-secret"
-BASE_URL="http://localhost:8080"
-```
+- API key comparison uses `hmac.compare_digest()` to prevent timing attacks
+- Status transitions are enforced server-side — the client cannot skip steps
+- Document processing happens asynchronously after commit, never before
+- All datetimes are timezone-aware UTC
 
-### Create an intake (creates a case)
-```bash
-curl -s -H "X-API-Key: $API_KEY"   -H "Content-Type: application/json"   -d '{
-    "full_name":"Test Patient",
-    "email":"test@example.com",
-    "narrative":"hello from local"
-  }'   "$BASE_URL/intakes"
-```
-
-### List cases
-```bash
-curl -s -H "X-API-Key: $API_KEY" "$BASE_URL/cases"
-```
-
-### Add a note
-```bash
-CASE_ID=1
-
-curl -s -H "X-API-Key: $API_KEY"   -H "Content-Type: application/json"   -d '{"author":"Jeremy","body":"First note"}'   "$BASE_URL/cases/$CASE_ID/notes"
-```
-
-### List notes
-```bash
-curl -s -H "X-API-Key: $API_KEY" "$BASE_URL/cases/$CASE_ID/notes"
-```
-
-### Add a document (metadata)
-```bash
-curl -s -H "X-API-Key: $API_KEY"   -H "Content-Type: application/json"   -d '{"filename":"denial_letter.pdf","content_type":"application/pdf"}'   "$BASE_URL/cases/$CASE_ID/documents"
-```
-
-### List documents
-```bash
-curl -s -H "X-API-Key: $API_KEY" "$BASE_URL/cases/$CASE_ID/documents"
-```
-
----
-
-## Production (Cloud Run)
-
-This deployment setup uses:
-- **Artifact Registry** for images
-- **Cloud Run** for hosting
-- **Cloud SQL (Postgres)** for the database
-- **Secret Manager** for API key + DB password
-
-### Environment Variables (Cloud Run)
-
-Typical values in Cloud Run:
-
-- `DB_HOST` = `/cloudsql/<PROJECT>:<REGION>:<INSTANCE>`
-- `DB_NAME` = `advocacy`
-- `DB_USER` = `advocacy`
-- `DB_PASSWORD` = from Secret Manager (`CLOVER_DB_PASSWORD`)
-- `API_KEY` = from Secret Manager (`CLOVER_API_KEY`)
-
----
-
-## Production Smoke Test (Cloud Run)
-
-This is the “does prod actually work?” checklist you can run after deploy.
-
-### Prereqs
-- `gcloud` authenticated and set to the correct project
-- `python3` available (for pretty JSON)
-- `CLOVER_API_KEY` stored in Secret Manager
-
-### 0) Set URL + API key
-```bash
-REGION="us-west1"
-SERVICE="clove-api"
-
-URL="$(gcloud run services describe "$SERVICE" --region "$REGION" --format='value(status.url)')"
-API_KEY="$(gcloud secrets versions access latest --secret=CLOVER_API_KEY)"
-
-echo "URL=$URL"
-```
-
-### 1) Health check
-```bash
-curl -s "$URL/health" | python3 -m json.tool
-```
-
-Expected:
-```json
-{"status":"ok"}
-```
-
-### 2) Create an intake (creates a case)
-```bash
-curl -s -H "X-API-Key: $API_KEY"   -H "Content-Type: application/json"   -d '{
-    "full_name":"Prod Smoke",
-    "email":"prod-smoke@example.com",
-    "narrative":"hello from prod"
-  }'   "$URL/intakes" | python3 -m json.tool
-```
-
-Expected shape:
-```json
-{"case_id": 123, "status": "NEW"}
-```
-
-Set:
-```bash
-CASE_ID=123
-```
-
-### 3) List cases
-```bash
-curl -s -H "X-API-Key: $API_KEY" "$URL/cases" | python3 -m json.tool
-```
-
-### 4) Add a note
-```bash
-curl -s -H "X-API-Key: $API_KEY"   -H "Content-Type: application/json"   -d '{"author":"prod-smoke","body":"First note from prod"}'   "$URL/cases/$CASE_ID/notes" | python3 -m json.tool
-```
-
-Expected shape:
-```json
-{"note_id": 1, "case_id": 123}
-```
-
-### 5) List notes
-```bash
-curl -s -H "X-API-Key: $API_KEY" "$URL/cases/$CASE_ID/notes" | python3 -m json.tool
-```
-
-### 6) Add a document (metadata)
-```bash
-curl -s -H "X-API-Key: $API_KEY"   -H "Content-Type: application/json"   -d '{"filename":"denial_letter.pdf","content_type":"application/pdf"}'   "$URL/cases/$CASE_ID/documents" | python3 -m json.tool
-```
-
-Expected shape:
-```json
-{"document_id": 1, "case_id": 123, "status": "UPLOADED"}
-```
-
-Set:
-```bash
-DOCUMENT_ID=1
-```
-
-### 7) Trigger processing (internal endpoint)
-```bash
-curl -s -X POST -H "X-API-Key: $API_KEY"   "$URL/internal/documents/$DOCUMENT_ID/process" | python3 -m json.tool
-```
-
----
-
-## Alembic + Cloud SQL Notes (Important)
-
-If you see errors like:
-
-- `relation "documents" does not exist`
-
-…it means your Cloud SQL database is missing migrations.
-
-### Run Alembic against Cloud SQL via Cloud SQL Proxy
-
-1) Start the proxy (local machine)
-```bash
-PROJECT_ID="$(gcloud config get-value project)"
-REGION="us-west1"
-INSTANCE="clove-pg"
-
-CONNECTION_NAME="$(gcloud sql instances describe "$INSTANCE" --format='value(connectionName)')"
-cloud-sql-proxy "$CONNECTION_NAME" --port 5433
-```
-
-2) Run migrations from inside the Docker `api` container using the proxy
-```bash
-DB_PASSWORD="$(gcloud secrets versions access latest --secret=CLOVER_DB_PASSWORD)"
-DATABASE_URL="postgresql+psycopg://advocacy:${DB_PASSWORD}@host.docker.internal:5433/advocacy"
-
-docker compose exec -e DATABASE_URL="$DATABASE_URL" api alembic upgrade head
-```
-
-3) Verify tables exist (requires `psql`)
-```bash
-psql "postgresql://advocacy:${DB_PASSWORD}@127.0.0.1:5433/advocacy" -c "\dt"
-```
-
----
-
-## Troubleshooting
-
-### `Method Not Allowed`
-You used the wrong HTTP method for the route (e.g., `GET` vs `POST`).  
-Check:
-- `GET /openapi.json`
-
-### 500s in Cloud Run but no app logs
-Request logs show up under `run.googleapis.com/requests`.  
-Your stdout/stderr logs show up under:
-- `run.googleapis.com/stdout`
-- `run.googleapis.com/stderr`
-
-### Container failed to start on Cloud Run
-Usually a Python import error or app boot error.  
-Check revision logs and ensure your container listens on port `8080`.
-
----
-
-## License
-MIT (or your preference)
+If you see something that looks wrong, say something. Healthcare is regulated for a reason.
