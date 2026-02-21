@@ -9,6 +9,8 @@ from alembic import context
 from app.db import Base
 from app import models 
 
+API_KEY=test-api-key
+
 
 target_metadata = Base.metadata
 
@@ -67,3 +69,4 @@ if context.is_offline_mode():
     run_migrations_offline()
 else:
     run_migrations_online()
+
