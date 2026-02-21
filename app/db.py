@@ -2,27 +2,26 @@
 from urllib.parse import quote_plus
 
 from pydantic import computed_field
-from pydantic_settings import BaseSettings
+from pydantic_settings import BaseSettings, SettingsConfigDict
 from sqlalchemy.ext.asyncio import create_async_engine, AsyncSession, async_sessionmaker
 from sqlalchemy.orm import DeclarativeBase
-from sqlalchemy.pool import NullPool
 
 
 class Settings(BaseSettings):
-    # Accept a full DATABASE_URL directly (local dev, tests, CI)
-    database_url: str = ""
+    model_config = SettingsConfigDict(
+        env_file=".env",
+        env_file_encoding="utf-8",
+        case_sensitive=False,
+        extra="ignore",
+    )
 
-    # Or build it from discrete parts (Cloud Run style)
+    database_url: str = ""
     db_name: str = "advocacy"
     db_user: str = "advocacy"
     db_password: str = ""
     db_host: str = ""
-
-    # Connection pool config
     db_pool_size: int = 5
     db_max_overflow: int = 2
-
-    # API key
     api_key: str = ""
 
     @computed_field
@@ -43,15 +42,8 @@ class Settings(BaseSettings):
             f"@{host}/{quote_plus(self.db_name)}"
         )
 
-    class Config:
-        env_file = ".env"
-        env_file_encoding = "utf-8"
-        case_sensitive = False
-        extra = "ignore"
-
 
 settings = Settings()
-
 
 engine = create_async_engine(
     settings.effective_database_url,

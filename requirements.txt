@@ -5,3 +5,8 @@ alembic
 psycopg[binary]
 pydantic-settings
 email-validator
+httpx
+pytest
+pytest-asyncio
+anyio[trio]
+aiosqlite
