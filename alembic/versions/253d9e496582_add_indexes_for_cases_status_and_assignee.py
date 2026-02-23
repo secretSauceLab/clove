@@ -1,4 +1,4 @@
-"""add indexes and onupdate to timestamps
+"""add indexes for cases status and assignee
 
 Revision ID: 253d9e496582
 Revises: dfe21e7f7b3f
