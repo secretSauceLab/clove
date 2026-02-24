@@ -3,7 +3,7 @@
 
 A FastAPI intake API for patient advocacy case management. Clove is the internal intake layer that powers Cinnamon's case pipeline — handling everything from first contact with a patient to document processing, status tracking, and case notes.
 
-Named after the spice. We're Cinnamon. You get it.
+Named after the spice.
 
 ---
 
