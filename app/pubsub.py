@@ -1,5 +1,8 @@
 import asyncio
 
+class PubSubMessage:
+    def __init__(self, data):
+        self.data = data
 
 class LocalPubSub:
     def __init__(self):
@@ -12,8 +15,9 @@ class LocalPubSub:
     async def publish(self, topic_name, data):
         if topic_name not in self.topics:
             raise ValueError(f"Topic '{topic_name}' does not exist")
+        message = PubSubMessage(data)
         for q in self.topics[topic_name]:
-            await q.put(data)
+            await q.put(message)
 
     def subscribe(self, topic_name, handler):
         q = asyncio.Queue()
@@ -25,3 +29,12 @@ class LocalPubSub:
                 await handler(message)
 
         asyncio.create_task(_listen())
+
+_instance = None
+
+
+def get_pubsub():
+    global _instance
+    if _instance is None:
+        _instance = LocalPubSub()
+    return _instance
