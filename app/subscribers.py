@@ -1,17 +1,23 @@
 # app/subscribers.py
 import asyncio
+import json
 import logging
+import os
+
+from dotenv import load_dotenv
+from google import genai
 
 from .pubsub import get_pubsub, PubSubMessage
 from .fhir import strip_plumbing, classify_relevance, to_natural_language
 
 log = logging.getLogger(__name__)
+load_dotenv()
 
 
 async def fetch_fhir_from_hospital(case_id):
     """
-    Simulates fetching FHIR patient records from a hospital.
-    In production: HTTP call to hospital's server.
+    Fetch FHIR records from hospital EHR.
+    TODO: Replace with real HTTP call to hospital FHIR server.
     """
     await asyncio.sleep(0.3)
     return {
@@ -31,46 +37,51 @@ async def fetch_fhir_from_hospital(case_id):
 
 
 async def answer_questions_with_llm(patient_summary, questions):
-    """
-    Simulates calling Gemini to answer prior auth questions.
-    In production: client.models.generate_content() via genai SDK.
-    """
-    await asyncio.sleep(0.2)
+    """Answer prior auth questions using Gemini given a patient summary."""
+    client = genai.Client(api_key=os.getenv("GEMINI_API_KEY"))
+
     answers = []
     for question in questions:
-        q_lower = question.lower()
-        if "diagnosis" in q_lower or "confirmed" in q_lower:
+        response = client.models.generate_content(
+            model="gemini-2.5-flash",
+            contents=f"""You are a clinical documentation specialist assisting with prior authorization.
+
+Given the patient's medical history below, answer the following question.
+
+PATIENT HISTORY (each record has an ID in parentheses):
+{patient_summary}
+
+QUESTION: {question}
+
+Respond in this exact JSON format and nothing else:
+{{
+    "answer": "Your 1-3 sentence answer here",
+    "supporting_record_ids": ["list", "of", "record", "ids", "from", "the", "history"],
+    "confidence": 0.0 to 1.0
+}}""",
+        )
+
+        try:
+            text = response.text.strip()
+            if text.startswith("```"):
+                text = text.split("\n", 1)[1].rsplit("```", 1)[0].strip()
+            parsed = json.loads(text)
             answers.append({
                 "question": question,
-                "answer": "Yes. Patient has confirmed ankylosing spondylitis, onset April 2015.",
-                "supporting_record_ids": ["cond-001"],
-                "confidence": 0.95,
+                "answer": parsed["answer"],
+                "supporting_record_ids": parsed.get("supporting_record_ids", []),
+                "confidence": parsed.get("confidence", 0.5),
             })
-        elif "tried" in q_lower or "failed" in q_lower or "nsaid" in q_lower:
+        except (json.JSONDecodeError, KeyError):
             answers.append({
                 "question": question,
-                "answer": "Yes. Patient has been on Celebrex 200mg since January 2016. Elevated CRP (15.2 mg/L) and ESR (38 mm/hr) indicate ongoing active inflammation despite NSAID therapy.",
-                "supporting_record_ids": ["med-001", "obs-001", "obs-002"],
-                "confidence": 0.91,
+                "answer": response.text,
+                "supporting_record_ids": [],
+                "confidence": 0.5,
             })
-        elif "inflammation" in q_lower or "disease activity" in q_lower:
-            answers.append({
-                "question": question,
-                "answer": "Yes. CRP is 15.2 mg/L (elevated) and ESR is 38 mm/hr (elevated), both recorded January 2025, indicating active disease.",
-                "supporting_record_ids": ["obs-001", "obs-002"],
-                "confidence": 0.93,
-            })
-        else:
-            answers.append({
-                "question": question,
-                "answer": "Based on available records, the patient appears to meet this criteria.",
-                "supporting_record_ids": ["cond-001", "obs-001", "med-001"],
-                "confidence": 0.72,
-            })
+
     return answers
 
-
-# ---- Subscriber handlers ----
 
 async def handle_prior_auth_requested(message):
     data = message.data
@@ -128,8 +139,6 @@ async def handle_prior_auth_answered(message):
     log.info("Notifier: request %s completed with %d answers",
              data["request_id"], len(data["answers"]))
 
-
-# ---- Setup ----
 
 def setup_pipeline():
     pubsub = get_pubsub()
