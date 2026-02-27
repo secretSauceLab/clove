@@ -1,4 +1,3 @@
-# app/models_prior_auth.py
 import enum
 from datetime import datetime
 from typing import Optional, List

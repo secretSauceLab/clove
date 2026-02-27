@@ -1,4 +1,3 @@
-# app/auth.py
 import hmac
 from fastapi import Header, HTTPException
 from .db import settings

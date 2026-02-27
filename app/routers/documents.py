@@ -1,4 +1,3 @@
-# app/routers/documents.py
 from typing import List
 from fastapi import APIRouter, Depends, HTTPException, BackgroundTasks
 from sqlalchemy.ext.asyncio import AsyncSession

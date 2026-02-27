@@ -1,4 +1,18 @@
+import logging
+import os
+
+from dotenv import load_dotenv
+from google import genai
+from pydantic import BaseModel, Field
+
+load_dotenv()
+log = logging.getLogger(__name__)
+
 PLUMBING_KEYS = {"meta", "text", "contained", "implicitRules", "language"}
+CLINICAL_TYPES = {
+    "Condition", "Observation", "MedicationRequest",
+    "Procedure", "DiagnosticReport", "CarePlan", "AllergyIntolerance",
+}
 
 
 def strip_plumbing(bundle):
@@ -10,46 +24,92 @@ def strip_plumbing(bundle):
         clean_resources.append(resource)
     return clean_resources
 
-def classify_relevance(resources, condition, drug):
+
+async def classify_relevance(resources, condition, drug):
+    class ResourceRelevance(BaseModel):
+        id: str = Field(description="The resource ID")
+        relevant: bool = Field(description="Whether this resource is relevant to the condition and drug")
+        reasoning: str = Field(description="Brief explanation of the classification")
+
+    class BatchClassification(BaseModel):
+        classifications: list[ResourceRelevance]
+
+    client = genai.Client(api_key=os.getenv("GEMINI_API_KEY"))
     relevant = []
-    condition_lower = condition.lower()
-    drug_lower = drug.lower()
 
-    for resource in resources:
-        rtype = resource["resourceType"]
+    # Always keep Patient
+    for r in resources:
+        if r["resourceType"] == "Patient":
+            relevant.append(r)
 
-        # Always keep patient demographics
-        if rtype == "Patient":
-            relevant.append(resource)
+    # Group clinical resources by type
+    clinical_batches = {}
+    for r in resources:
+        rtype = r["resourceType"]
+        if rtype in CLINICAL_TYPES:
+            clinical_batches.setdefault(rtype, []).append(r)
 
-        # Keep conditions that match the condition name
-        elif rtype == "Condition":
-            text = resource.get("code", {}).get("text", "").lower()
-            if condition_lower in text or text in condition_lower:
-                relevant.append(resource)
+    # Classify each batch with Gemini
+    for rtype, batch in clinical_batches.items():
+        log.info("Classifying %d %s resources", len(batch), rtype)
 
-        # Keep observations (labs) that relate to the condition
-        elif rtype == "Observation":
-            text = resource.get("code", {}).get("text", "").lower()
-            # For ankylosing spondylitis: inflammation markers and genetic test
-            relevant_labs = ["crp", "c-reactive", "esr", "sedimentation", "hla-b27"]
-            if any(lab in text for lab in relevant_labs):
-                relevant.append(resource)
+        summaries = []
+        for r in batch:
+            rid = r.get("id", "unknown")
+            if rtype == "Condition":
+                text = r.get("code", {}).get("text", "unknown")
+                summaries.append(f"ID: {rid} — {text}")
+            elif rtype == "Observation":
+                text = r.get("code", {}).get("text", "unknown")
+                val = r.get("valueQuantity", {})
+                summaries.append(f"ID: {rid} — {text}: {val.get('value', '?')} {val.get('unit', '')}")
+            elif rtype == "MedicationRequest":
+                text = r.get("medicationCodeableConcept", {}).get("text", "unknown")
+                summaries.append(f"ID: {rid} — {text}")
+            else:
+                text = r.get("code", {}).get("text", "unknown")
+                summaries.append(f"ID: {rid} — {text}")
 
-        # Keep medications related to the drug or the condition
-        elif rtype == "MedicationRequest":
-            med = resource.get("medicationCodeableConcept", {})
-            text = med.get("text", "").lower()
-            # Biologics and NSAIDs used for ankylosing spondylitis
-            related_meds = ["humira", "adalimumab", "enbrel", "etanercept",
-                "cosentyx", "secukinumab", "naproxen", "ibuprofen",
-                "celebrex", "celecoxib"]
-            if any(med_name in text for med_name in related_meds):
-                relevant.append(resource)
+        resource_list = "\n".join(summaries)
 
-        # Everything else gets dropped
+        response = client.models.generate_content(
+            model="gemini-2.5-flash",
+            contents=f"""You are a clinical relevance classifier for prior authorization.
+
+Given the condition and drug below, classify each {rtype} resource as relevant or not relevant.
+
+CONDITION: {condition}
+DRUG: {drug}
+
+{rtype.upper()} RESOURCES:
+{resource_list}
+
+Classify every resource listed above. Be STRICT. A resource is relevant ONLY if it directly relates to:
+- The diagnosis of {condition}
+- Treatments or medications for {condition}
+- Lab results that measure disease activity or treatment response for {condition}
+- Imaging or procedures specifically for {condition}
+- Documentation of prior therapy failure that would justify prescribing {drug}
+
+Routine physical examinations, general evaluations, history taking, reviews of systems,
+and standard encounter procedures are NOT relevant.
+Pre-treatment safety screenings (TB, hepatitis, CBC) ARE relevant if they relate to biologic therapy.
+When in doubt, mark as NOT relevant.""",
+            config={
+                "response_mime_type": "application/json",
+                "response_json_schema": BatchClassification.model_json_schema(),
+            },
+        )
+
+        result = BatchClassification.model_validate_json(response.text)
+
+        relevant_ids = {c.id for c in result.classifications if c.relevant}
+        for r in batch:
+            if r.get("id", "unknown") in relevant_ids:
+                relevant.append(r)
 
     return relevant
+
 
 def to_natural_language(resources):
     lines = []
@@ -83,5 +143,10 @@ def to_natural_language(resources):
             status = resource.get("status", "unknown")
             authored = resource.get("authoredOn", "unknown date")
             lines.append(f"Medication: {display}, status: {status} (prescribed {authored}).")
+
+        else:
+            display = resource.get("code", {}).get("text", "")
+            if display:
+                lines.append(f"{rtype}: {display}.")
 
     return "\n".join(lines)
