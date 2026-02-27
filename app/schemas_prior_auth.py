@@ -1,4 +1,3 @@
-# app/schemas_prior_auth.py
 from pydantic import BaseModel, Field, ConfigDict
 from datetime import datetime
 

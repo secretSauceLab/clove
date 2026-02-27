@@ -1,7 +1,6 @@
-
 # Clove
 
-A FastAPI intake API for patient advocacy case management. Clove is the internal intake layer that powers Cinnamon's case pipeline; handling everything from first contact with a patient to document processing, status tracking, and case notes.
+A FastAPI API for patient advocacy case management with a prior authorization pipeline. Handles intakes, case tracking, document processing, and answering insurance questionnaires using FHIR records and Gemini.
 
 Named after the spice.
 
@@ -13,7 +12,31 @@ Named after the spice.
 - Tracks case status through a defined workflow (NEW → IN_REVIEW → SUBMITTED → APPROVED, and so on)
 - Stores case notes, documents, and a full status event audit trail
 - Processes documents asynchronously via background tasks
-- Enforces valid status transitions so nobody accidentally approves a case that hasn't been reviewed (we checked)
+- Enforces valid status transitions so nobody accidentally approves a case that hasn't been reviewed
+- **Processes prior authorization requests asynchronously via a pub/sub pipeline**
+- **Classifies FHIR R4 record relevance using Gemini structured output (Pydantic schemas)**
+- **Answers insurance questionnaires using Gemini with supporting record citations**
+
+---
+
+## Prior Authorization Pipeline
+
+The most time-consuming part of patient advocacy is filling out insurance prior auth questionnaires. Nurses dig through medical records to answer questions like "Has the patient tried and failed first-line therapy?" — for every patient, every drug, every submission.
+
+Clove automates most of this:
+
+1. Nurse submits a prior auth request with the condition, drug, and questionnaire questions
+2. API returns 202 (Accepted) immediately
+3. Pipeline processes asynchronously through four pub/sub stages:
+   - **Fetch** FHIR records from the hospital EHR
+   - **Classify** — strip interoperability plumbing, then use Gemini structured output to classify each record's relevance to the condition/drug, convert relevant records to natural language
+   - **Answer** — Gemini answers each question and cites supporting records
+   - **Notify** — alert the nurse that results are ready
+4. Nurse reviews answers and supporting records before submission to insurance
+
+Classification uses Gemini with structured output (Pydantic response schemas) instead of a trained model. Each classification comes back as `relevant: true/false` with reasoning. Nurse corrections on the results become labeled training data — the plan is to eventually train a custom classifier once there's enough data.
+
+Pub/sub is local right now (asyncio queues) but structured to swap to Google Cloud Pub/Sub without changing the pipeline logic. FHIR records come from Synthea.
 
 ---
 
@@ -22,8 +45,9 @@ Named after the spice.
 - **Python 3.11** + **FastAPI**
 - **PostgreSQL** via SQLAlchemy 2.0 (async)
 - **Alembic** for migrations
+- **Google Gemini** (gemini-2.5-flash) via the google-genai SDK
 - **Docker + Docker Compose** for local development
-- **Google Cloud Run + Cloud SQL** in production (eventually)
+- **Google Cloud Run + Cloud SQL** for deployment
 
 ---
 
@@ -38,7 +62,7 @@ That's it. You don't need Python, Postgres, or anything else installed locally.
 
 ### Run it
 ```bash
-cp .env.example .env       # fill in your values
+cp .env.example .env       # fill in your values (API_KEY, GEMINI_API_KEY)
 docker compose up --build
 ```
 
@@ -57,6 +81,7 @@ curl http://localhost:8000/health
 | Variable | Description | Default |
 |---|---|---|
 | `API_KEY` | Required. Shared secret for API authentication. | — |
+| `GEMINI_API_KEY` | Required for prior auth pipeline. Google AI API key. | — |
 | `DATABASE_URL` | Full Postgres connection string. Overrides individual DB vars. | — |
 | `DB_HOST` | Postgres host. Use `/cloudsql/<connection>` for Cloud SQL. | `localhost` |
 | `DB_NAME` | Database name. | `advocacy` |
@@ -69,7 +94,7 @@ curl http://localhost:8000/health
 
 ## API overview
 
-All endpoints require an `X-API-Key` header. No key, no data. Gerald understands.
+All endpoints require an `X-API-Key` header.
 
 | Method | Endpoint | Description |
 |---|---|---|
@@ -81,6 +106,8 @@ All endpoints require an `X-API-Key` header. No key, no data. Gerald understands
 | `GET` | `/cases/{id}/notes` | List notes for a case |
 | `POST` | `/cases/{id}/documents` | Upload a document reference |
 | `GET` | `/cases/{id}/documents` | List documents for a case |
+| `POST` | `/prior-auth` | Submit a prior authorization request (returns 202) |
+| `GET` | `/prior-auth/{id}` | Check status and results of a prior auth request |
 | `GET` | `/health` | Health check |
 
 ### Case status workflow
@@ -116,8 +143,6 @@ docker compose exec api alembic downgrade -1
 docker compose exec api pytest tests/ -v
 ```
 
-37 tests. All passing. Gerald's hammock claim is fully covered.
-
 Tests use an in-memory SQLite database with transaction rollback isolation — no Postgres required, no cleanup needed, finishes in under a second.
 
 ---
@@ -125,18 +150,31 @@ Tests use an in-memory SQLite database with transaction rollback isolation — n
 ## Project structure
 ```
 app/
-  routers/          # one file per domain (intakes, cases, notes, documents)
-  models.py         # SQLAlchemy ORM models
-  schemas.py        # Pydantic request/response schemas
-  db.py             # async engine, session factory, settings
-  auth.py           # API key authentication
-  jobs.py           # background document processing
-  enqueue.py        # background task dispatcher
+  routers/              # one file per domain
+    intakes.py
+    cases.py
+    notes.py
+    documents.py
+    internal.py
+    prior_auth.py       # prior auth API endpoints
+  models.py             # SQLAlchemy ORM models (cases, applicants, notes, documents)
+  models_prior_auth.py  # prior auth request + answer models
+  schemas.py            # Pydantic request/response schemas
+  schemas_prior_auth.py # prior auth schemas
+  db.py                 # async engine, session factory, settings
+  auth.py               # API key authentication
+  pubsub.py             # local pub/sub (swappable to Google Cloud Pub/Sub)
+  fhir.py               # FHIR R4 processing: strip plumbing, Gemini structured output classification, NL conversion
+  subscribers.py        # pipeline stage handlers + Gemini integration
+  jobs.py               # background document processing
+  enqueue.py            # background task dispatcher
 alembic/
-  versions/         # migration history
+  versions/             # migration history
+data/
+  sample_patient.json   # Synthea-generated FHIR R4 patient bundle (684 resources)
 tests/
-  conftest.py       # shared fixtures
-  test_*.py         # one file per router
+  conftest.py           # shared fixtures
+  test_*.py             # one file per domain
 ```
 
 ---
@@ -149,5 +187,8 @@ This API handles patient data. A few things worth knowing:
 - Status transitions are enforced server-side — the client cannot skip steps
 - Document processing happens asynchronously after commit, never before
 - All datetimes are timezone-aware UTC
+- Docker container runs as a non-root user
+- Global exception handler prevents stack trace leakage
+- API keys and credentials are loaded from environment variables, never committed
 
 If you see something that looks wrong, say something. Healthcare is regulated for a reason.

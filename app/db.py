@@ -1,4 +1,3 @@
-# app/db.py
 from urllib.parse import quote_plus
 
 from pydantic import computed_field

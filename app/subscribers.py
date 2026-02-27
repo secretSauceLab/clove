@@ -1,13 +1,12 @@
-# app/subscribers.py
-import asyncio
 import json
 import logging
 import os
 
+from pathlib import Path
 from dotenv import load_dotenv
 from google import genai
 
-from .pubsub import get_pubsub, PubSubMessage
+from .pubsub import get_pubsub
 from .fhir import strip_plumbing, classify_relevance, to_natural_language
 
 log = logging.getLogger(__name__)
@@ -15,29 +14,22 @@ load_dotenv()
 
 
 async def fetch_fhir_from_hospital(case_id):
-    """
-    Fetch FHIR records from hospital EHR.
-    TODO: Replace with real HTTP call to hospital FHIR server.
-    """
-    await asyncio.sleep(0.3)
-    return {
-        "resourceType": "Bundle",
-        "entry": [
-            {"fullUrl": "urn:uuid:p1", "resource": {"resourceType": "Patient", "id": "p1", "name": [{"family": "Martinez", "given": ["Sofia"]}], "birthDate": "1968-07-22", "gender": "female"}, "request": {"method": "POST", "url": "Patient"}},
-            {"fullUrl": "urn:uuid:c1", "resource": {"resourceType": "Condition", "id": "cond-001", "code": {"text": "Ankylosing spondylitis"}, "onsetDateTime": "2015-04-10"}, "request": {"method": "POST", "url": "Condition"}},
-            {"fullUrl": "urn:uuid:c2", "resource": {"resourceType": "Condition", "id": "cond-002", "code": {"text": "Seasonal allergies"}, "onsetDateTime": "2005-03-01"}, "request": {"method": "POST", "url": "Condition"}},
-            {"fullUrl": "urn:uuid:o1", "resource": {"resourceType": "Observation", "id": "obs-001", "code": {"text": "C-reactive protein"}, "valueQuantity": {"value": 15.2, "unit": "mg/L"}, "effectiveDateTime": "2025-01-10"}, "request": {"method": "POST", "url": "Observation"}},
-            {"fullUrl": "urn:uuid:o2", "resource": {"resourceType": "Observation", "id": "obs-002", "code": {"text": "ESR Westergren"}, "valueQuantity": {"value": 38, "unit": "mm/hr"}, "effectiveDateTime": "2025-01-10"}, "request": {"method": "POST", "url": "Observation"}},
-            {"fullUrl": "urn:uuid:o3", "resource": {"resourceType": "Observation", "id": "obs-003", "code": {"text": "Body Mass Index"}, "valueQuantity": {"value": 26.1, "unit": "kg/m2"}, "effectiveDateTime": "2025-01-10"}, "request": {"method": "POST", "url": "Observation"}},
-            {"fullUrl": "urn:uuid:m1", "resource": {"resourceType": "MedicationRequest", "id": "med-001", "medicationCodeableConcept": {"text": "Celebrex 200mg"}, "status": "active", "authoredOn": "2016-01-15"}, "request": {"method": "POST", "url": "MedicationRequest"}},
-            {"fullUrl": "urn:uuid:m2", "resource": {"resourceType": "MedicationRequest", "id": "med-002", "medicationCodeableConcept": {"text": "Lisinopril 10mg"}, "status": "active", "authoredOn": "2019-08-10"}, "request": {"method": "POST", "url": "MedicationRequest"}},
-            {"fullUrl": "urn:uuid:i1", "resource": {"resourceType": "Immunization", "id": "imm-001", "vaccineCode": {"text": "Influenza seasonal"}, "occurrenceDateTime": "2024-10-01"}, "request": {"method": "POST", "url": "Immunization"}},
-        ],
-    }
+    """Fetch FHIR records from hospital EHR."""
+    
+    fhir_path = Path(__file__).parent.parent / "data" / "sample_patient.json"
+    with open(fhir_path) as f:
+        return json.load(f)
 
 
 async def answer_questions_with_llm(patient_summary, questions):
-    """Answer prior auth questions using Gemini given a patient summary."""
+    """Answer prior auth questions using Gemini structured output."""
+    from pydantic import BaseModel, Field
+
+    class PriorAuthQA(BaseModel):
+        answer: str = Field(description="1-3 sentence answer to the question")
+        supporting_record_ids: list[str] = Field(description="Lines from the patient history that support this answer")
+        confidence: float = Field(description="Confidence score from 0.0 to 1.0")
+
     client = genai.Client(api_key=os.getenv("GEMINI_API_KEY"))
 
     answers = []
@@ -48,37 +40,23 @@ async def answer_questions_with_llm(patient_summary, questions):
 
 Given the patient's medical history below, answer the following question.
 
-PATIENT HISTORY (each record has an ID in parentheses):
+PATIENT HISTORY:
 {patient_summary}
 
-QUESTION: {question}
-
-Respond in this exact JSON format and nothing else:
-{{
-    "answer": "Your 1-3 sentence answer here",
-    "supporting_record_ids": ["list", "of", "record", "ids", "from", "the", "history"],
-    "confidence": 0.0 to 1.0
-}}""",
+QUESTION: {question}""",
+            config={
+                "response_mime_type": "application/json",
+                "response_json_schema": PriorAuthQA.model_json_schema(),
+            },
         )
 
-        try:
-            text = response.text.strip()
-            if text.startswith("```"):
-                text = text.split("\n", 1)[1].rsplit("```", 1)[0].strip()
-            parsed = json.loads(text)
-            answers.append({
-                "question": question,
-                "answer": parsed["answer"],
-                "supporting_record_ids": parsed.get("supporting_record_ids", []),
-                "confidence": parsed.get("confidence", 0.5),
-            })
-        except (json.JSONDecodeError, KeyError):
-            answers.append({
-                "question": question,
-                "answer": response.text,
-                "supporting_record_ids": [],
-                "confidence": 0.5,
-            })
+        parsed = PriorAuthQA.model_validate_json(response.text)
+        answers.append({
+            "question": question,
+            "answer": parsed.answer,
+            "supporting_record_ids": parsed.supporting_record_ids,
+            "confidence": parsed.confidence,
+        })
 
     return answers
 
@@ -99,7 +77,7 @@ async def handle_fhir_records_ready(message):
     log.info("Classifier: processing request %s", data["request_id"])
 
     resources = strip_plumbing(data["bundle"])
-    relevant = classify_relevance(resources, data["condition"], data["drug"])
+    relevant = await classify_relevance(resources, data["condition"], data["drug"])
     patient_summary = to_natural_language(relevant)
 
     log.info("Classifier: %d resources -> %d relevant", len(resources), len(relevant))
