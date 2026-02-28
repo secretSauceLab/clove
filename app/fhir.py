@@ -15,6 +15,28 @@ CLINICAL_TYPES = {
 }
 
 
+class ResourceRelevance(BaseModel):
+    id: str = Field(description="The resource index")
+    relevant: bool = Field(description="Whether this resource is relevant to the condition and drug")
+    reasoning: str = Field(description="Brief explanation of the classification")
+
+
+class BatchClassification(BaseModel):
+    classifications: list[ResourceRelevance]
+
+
+def _get_gemini_client():
+    return genai.Client(api_key=os.getenv("GEMINI_API_KEY"))
+
+
+def _get_description(resource):
+    """Extract a human-readable description from a FHIR resource."""
+    rtype = resource["resourceType"]
+    if rtype == "MedicationRequest":
+        return resource.get("medicationCodeableConcept", {}).get("text", "unknown")
+    return resource.get("code", {}).get("text", "unknown")
+
+
 def strip_plumbing(bundle):
     clean_resources = []
     for entry in bundle["entry"]:
@@ -26,51 +48,30 @@ def strip_plumbing(bundle):
 
 
 async def classify_relevance(resources, condition, drug):
-    class ResourceRelevance(BaseModel):
-        id: str = Field(description="The resource ID")
-        relevant: bool = Field(description="Whether this resource is relevant to the condition and drug")
-        reasoning: str = Field(description="Brief explanation of the classification")
-
-    class BatchClassification(BaseModel):
-        classifications: list[ResourceRelevance]
-
-    client = genai.Client(api_key=os.getenv("GEMINI_API_KEY"))
+    client = _get_gemini_client()
     relevant = []
-
-    # Always keep Patient
-    for r in resources:
-        if r["resourceType"] == "Patient":
-            relevant.append(r)
-
-    # Group clinical resources by type
     clinical_batches = {}
+
     for r in resources:
         rtype = r["resourceType"]
-        if rtype in CLINICAL_TYPES:
+        if rtype == "Patient":
+            relevant.append(r)
+        elif rtype in CLINICAL_TYPES:
             clinical_batches.setdefault(rtype, []).append(r)
 
-    # Classify each batch with Gemini
     for rtype, batch in clinical_batches.items():
-        log.info("Classifying %d %s resources", len(batch), rtype)
-
-        summaries = []
+        # Deduplicate by description — classify unique names, map back to all matching resources
+        desc_to_resources = {}
         for r in batch:
-            rid = r.get("id", "unknown")
-            if rtype == "Condition":
-                text = r.get("code", {}).get("text", "unknown")
-                summaries.append(f"ID: {rid} — {text}")
-            elif rtype == "Observation":
-                text = r.get("code", {}).get("text", "unknown")
-                val = r.get("valueQuantity", {})
-                summaries.append(f"ID: {rid} — {text}: {val.get('value', '?')} {val.get('unit', '')}")
-            elif rtype == "MedicationRequest":
-                text = r.get("medicationCodeableConcept", {}).get("text", "unknown")
-                summaries.append(f"ID: {rid} — {text}")
-            else:
-                text = r.get("code", {}).get("text", "unknown")
-                summaries.append(f"ID: {rid} — {text}")
+            desc_to_resources.setdefault(_get_description(r), []).append(r)
 
-        resource_list = "\n".join(summaries)
+        unique_descriptions = list(desc_to_resources.keys())
+        log.info("Classifying %d unique %s descriptions (from %d resources)",
+                 len(unique_descriptions), rtype, len(batch))
+
+        resource_list = "\n".join(
+            f"ID: {i} — {desc}" for i, desc in enumerate(unique_descriptions)
+        )
 
         response = client.models.generate_content(
             model="gemini-2.5-flash",
@@ -104,12 +105,15 @@ When in doubt, mark as NOT relevant.""",
         result = BatchClassification.model_validate_json(response.text)
 
         relevant_ids = {c.id for c in result.classifications if c.relevant}
-        for r in batch:
-            if r.get("id", "unknown") in relevant_ids:
-                relevant.append(r)
+        for idx_str in relevant_ids:
+            try:
+                idx = int(idx_str)
+                desc = unique_descriptions[idx]
+                relevant.extend(desc_to_resources[desc])
+            except (ValueError, IndexError):
+                continue
 
     return relevant
-
 
 def to_natural_language(resources):
     lines = []

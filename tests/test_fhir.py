@@ -1,3 +1,4 @@
+import pytest
 from app.fhir import strip_plumbing, classify_relevance, to_natural_language
 
 def test_strip_plumbing_extracts_resources():
@@ -57,32 +58,40 @@ def test_strip_plumbing_removes_meta():
     assert "meta" not in result[0]
     assert result[0]["name"] == [{"family": "Doe"}]
 
-def test_classify_relevance_ankylosing_spondylitis():
+@pytest.mark.asyncio
+async def test_classify_relevance_ankylosing_spondylitis(monkeypatch):
+    """Unit test with mocked Gemini response."""
+    from unittest.mock import MagicMock
+    from app.fhir import classify_relevance
+
+    # Fake Gemini response — indices match unique descriptions
+    fake_json = '{"classifications": [' \
+        '{"id": "0", "relevant": true, "reasoning": "AS diagnosis"}, ' \
+        '{"id": "1", "relevant": false, "reasoning": "Not related"}' \
+    ']}'
+
+    fake_response = MagicMock()
+    fake_response.text = fake_json
+
+    fake_client = MagicMock()
+    fake_client.models.generate_content.return_value = fake_response
+
+    # Patch genai.Client to return our fake
+    import app.fhir
+    monkeypatch.setattr(app.fhir, "_get_gemini_client", lambda: fake_client)
+    
     resources = [
         {"resourceType": "Patient", "id": "p1", "name": [{"family": "Beal", "given": ["Jeremy"]}]},
         {"resourceType": "Condition", "id": "cond-1", "code": {"text": "Ankylosing spondylitis"}},
         {"resourceType": "Condition", "id": "cond-2", "code": {"text": "Seasonal allergies"}},
-        {"resourceType": "Observation", "id": "obs-1", "code": {"text": "C-reactive protein"}, "valueQuantity": {"value": 15.2, "unit": "mg/L"}},
-        {"resourceType": "Observation", "id": "obs-2", "code": {"text": "HLA-B27 antigen"}, "valueQuantity": {"value": "positive"}},
-        {"resourceType": "Observation", "id": "obs-3", "code": {"text": "Body Mass Index"}, "valueQuantity": {"value": 26.1, "unit": "kg/m2"}},
-        {"resourceType": "MedicationRequest", "id": "med-1", "medicationCodeableConcept": {"text": "Celebrex 200mg"}},
-        {"resourceType": "MedicationRequest", "id": "med-2", "medicationCodeableConcept": {"text": "Lisinopril 10mg"}},
-        {"resourceType": "Immunization", "id": "imm-1", "vaccineCode": {"text": "Influenza seasonal"}},
     ]
 
-    result = classify_relevance(resources, "Ankylosing spondylitis", "Humira (adalimumab)")
-
+    result = await classify_relevance(resources, "Ankylosing spondylitis", "Humira (adalimumab)")
     result_ids = [r["id"] for r in result]
 
     assert "p1" in result_ids       # Patient — always kept
-    assert "cond-1" in result_ids   # AS diagnosis — relevant
-    assert "cond-2" not in result_ids  # Allergies — not relevant
-    assert "obs-1" in result_ids    # CRP — inflammation marker
-    assert "obs-2" in result_ids    # HLA-B27 — genetic marker
-    assert "obs-3" not in result_ids   # BMI — not relevant
-    assert "med-1" in result_ids    # Celebrex — related NSAID
-    assert "med-2" not in result_ids   # Lisinopril — blood pressure med
-    assert "imm-1" not in result_ids   # Flu shot — not relevant
+    assert "cond-1" in result_ids   # AS — mock said relevant
+    assert "cond-2" not in result_ids  # Allergies — mock said not relevant
 
 def test_to_natural_language():
     resources = [

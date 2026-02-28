@@ -5,6 +5,7 @@ import os
 from pathlib import Path
 from dotenv import load_dotenv
 from google import genai
+from pydantic import BaseModel, Field
 
 from .pubsub import get_pubsub
 from .fhir import strip_plumbing, classify_relevance, to_natural_language
@@ -13,9 +14,18 @@ log = logging.getLogger(__name__)
 load_dotenv()
 
 
+class PriorAuthQA(BaseModel):
+    answer: str = Field(description="1-3 sentence answer to the question")
+    supporting_record_ids: list[str] = Field(description="Lines from the patient history that support this answer")
+    confidence: float = Field(description="Confidence score from 0.0 to 1.0")
+
+
+def _get_gemini_client():
+    return genai.Client(api_key=os.getenv("GEMINI_API_KEY"))
+
+
 async def fetch_fhir_from_hospital(case_id):
     """Fetch FHIR records from hospital EHR."""
-    
     fhir_path = Path(__file__).parent.parent / "data" / "sample_patient.json"
     with open(fhir_path) as f:
         return json.load(f)
@@ -23,14 +33,7 @@ async def fetch_fhir_from_hospital(case_id):
 
 async def answer_questions_with_llm(patient_summary, questions):
     """Answer prior auth questions using Gemini structured output."""
-    from pydantic import BaseModel, Field
-
-    class PriorAuthQA(BaseModel):
-        answer: str = Field(description="1-3 sentence answer to the question")
-        supporting_record_ids: list[str] = Field(description="Lines from the patient history that support this answer")
-        confidence: float = Field(description="Confidence score from 0.0 to 1.0")
-
-    client = genai.Client(api_key=os.getenv("GEMINI_API_KEY"))
+    client = _get_gemini_client()
 
     answers = []
     for question in questions:
