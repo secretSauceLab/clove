@@ -10,6 +10,10 @@ from pydantic import BaseModel, Field
 from .pubsub import get_pubsub
 from .fhir import strip_plumbing, classify_relevance, to_natural_language
 
+from sqlalchemy import select
+from .db import SessionLocal
+from .models_prior_auth import PriorAuthRequest, PriorAuthAnswer, PriorAuthStatus
+
 log = logging.getLogger(__name__)
 load_dotenv()
 
@@ -117,8 +121,27 @@ async def handle_records_classified(message):
 
 async def handle_prior_auth_answered(message):
     data = message.data
-    log.info("Notifier: request %s completed with %d answers",
-             data["request_id"], len(data["answers"]))
+    log.info("Notifier: saving %d answers for request %s",
+             len(data["answers"]), data["request_id"])
+
+    async with SessionLocal() as db:
+        result = await db.execute(
+            select(PriorAuthRequest).where(PriorAuthRequest.id == data["request_id"])
+        )
+        pa_request = result.scalar_one()
+        pa_request.status = PriorAuthStatus.COMPLETED.value
+
+        for a in data["answers"]:
+            db.add(PriorAuthAnswer(
+                request_id=data["request_id"],
+                question=a["question"],
+                answer=a["answer"],
+                supporting_record_ids=a["supporting_record_ids"],
+                confidence=a["confidence"],
+            ))
+
+        await db.commit()
+        log.info("Notifier: request %s saved as COMPLETED", data["request_id"])
 
 
 def setup_pipeline():

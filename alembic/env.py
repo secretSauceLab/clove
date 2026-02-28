@@ -7,10 +7,7 @@ from sqlalchemy.pool import NullPool
 from alembic import context
 
 from app.db import Base
-from app import models 
-
-API_KEY=test-api-key
-
+from app import models, models_prior_auth 
 
 target_metadata = Base.metadata
 

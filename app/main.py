@@ -9,6 +9,9 @@ from .routers import intakes, cases, notes, documents, internal
 from .routers import prior_auth
 from .subscribers import setup_pipeline
 
+logging.basicConfig(level=logging.INFO)
+
+
 log = logging.getLogger(__name__)
 
 

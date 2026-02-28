@@ -26,7 +26,13 @@ class LocalPubSub:
         async def _listen():
             while True:
                 message = await q.get()
-                await handler(message)
+                try:
+                    await handler(message)
+                except Exception as e:
+                    import logging
+                    logging.getLogger(__name__).error(
+                        "Handler %s failed: %s", handler.__name__, e, exc_info=True
+                    )
 
         asyncio.create_task(_listen())
 
