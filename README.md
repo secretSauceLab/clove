@@ -29,7 +29,7 @@ Clove automates most of this:
 2. API returns 202 (Accepted) immediately
 3. Pipeline processes asynchronously through four pub/sub stages:
    - **Fetch** FHIR records from the hospital EHR
-   - **Classify** — strip interoperability plumbing, then use Gemini structured output to classify each record's relevance to the condition/drug, convert relevant records to natural language
+   - **Classify** — strip interoperability plumbing, deduplicate resources by description, classify unique descriptions with Gemini structured output, map results back to all matching records, convert to natural language
    - **Answer** — Gemini answers each question and cites supporting records
    - **Notify** — alert the nurse that results are ready
 4. Nurse reviews answers and supporting records before submission to insurance
@@ -143,7 +143,13 @@ docker compose exec api alembic downgrade -1
 docker compose exec api pytest tests/ -v
 ```
 
-Tests use an in-memory SQLite database with transaction rollback isolation — no Postgres required, no cleanup needed, finishes in under a second.
+Tests use an in-memory SQLite database with transaction rollback isolation — no Postgres required, no cleanup needed, finishes in under a second. Gemini calls are mocked in unit tests.
+
+Integration tests (`tests/integration_test_*.py`) hit real Gemini and are excluded from `pytest` auto-discovery. Run them manually:
+```bash
+PYTHONPATH=. python tests/integration_test_pipeline.py
+PYTHONPATH=. python tests/integration_test_multi_patient.py
+```
 
 ---
 
@@ -171,10 +177,13 @@ app/
 alembic/
   versions/             # migration history
 data/
-  sample_patient.json   # Synthea-generated FHIR R4 patient bundle (684 resources)
+  sample_patient.json   # Synthea FHIR R4 bundle — rheumatoid arthritis (684 resources)
+  diabetes_patient.json # Synthea FHIR R4 bundle — prediabetes (1435 resources)
+  asthma_patient.json   # Synthea FHIR R4 bundle — asthma (1835 resources)
 tests/
   conftest.py           # shared fixtures
-  test_*.py             # one file per domain
+  test_*.py             # one file per domain (unit tests, mocked)
+  integration_test_*.py # end-to-end tests with real Gemini calls
 ```
 
 ---
