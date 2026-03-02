@@ -193,7 +193,7 @@ tests/
 This API handles patient data. A few things worth knowing:
 
 - API key comparison uses `hmac.compare_digest()` to prevent timing attacks
-- Status transitions are enforced server-side — the client cannot skip steps
+- Status transitions are enforced server-side; the client cannot skip steps
 - Document processing happens asynchronously after commit, never before
 - All datetimes are timezone-aware UTC
 - Docker container runs as a non-root user
