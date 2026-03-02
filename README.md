@@ -21,7 +21,7 @@ Named after the spice.
 
 ## Prior Authorization Pipeline
 
-The most time-consuming part of patient advocacy is filling out insurance prior auth questionnaires. Nurses dig through medical records to answer questions like "Has the patient tried and failed first-line therapy?" — for every patient, every drug, every submission.
+The most time-consuming part of patient advocacy is filling out insurance prior auth questionnaires. Nurses dig through medical records to answer questions like "Has the patient tried and failed first-line therapy?" for every patient, every drug, every submission.
 
 Clove automates most of this:
 
@@ -112,7 +112,7 @@ All endpoints require an `X-API-Key` header.
 
 ### Case status workflow
 
-Cases move through a defined set of states. Not all transitions are legal — the API will tell you if you try something inadvisable.
+Cases move through a defined set of states. Not all transitions are legal; the API will tell you if you try something inadvisable.
 ```
 NEW → IN_REVIEW → NEEDS_INFO → IN_REVIEW (loop until ready)
               ↓
@@ -143,7 +143,7 @@ docker compose exec api alembic downgrade -1
 docker compose exec api pytest tests/ -v
 ```
 
-Tests use an in-memory SQLite database with transaction rollback isolation — no Postgres required, no cleanup needed, finishes in under a second. Gemini calls are mocked in unit tests.
+Tests use an in-memory SQLite database with transaction rollback isolation; no Postgres required, no cleanup needed, finishes in under a second. Gemini calls are mocked in unit tests.
 
 Integration tests (`tests/integration_test_*.py`) hit real Gemini and are excluded from `pytest` auto-discovery. Run them manually:
 ```bash
